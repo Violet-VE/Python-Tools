@@ -5,6 +5,10 @@
 > 
 > 个人博客 https://jzverse.com.cn/ 还在编码中，完全开源，完全自主设计，前后端完全自研，前端采用Nuxt.js全家桶，后端采用C#最新预览版自研框架，敬请期待
 
+## 如何使用
+1. 首先你需要安装python，自行百度，之后安装pip包：`pip3 install certifi charset-normalizer dukpy idna PyYAML requests urllib3 you-get`
+2. 之后下载代码，运行`python3 script.py`即可
+
 ## 重复文件检查
 duplicate_checker脚本可以检测目录下是否有重复文件，分为精确检测和模糊检测，检测完，如果有重复文件，会生成一个结果文件，可据此来清理
 
