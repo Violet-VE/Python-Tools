@@ -5,6 +5,97 @@ import requests
 from urllib.parse import urlparse, parse_qs
 import os
 import json
+import math
+
+# BVID和AID转换相关的常量和函数
+TABLE = "fZodR9XQDSUm21yCkr6zBqiveYah8bt4xsWpHnJE7jL5VG3guMTKNPAwcF"
+S = [11, 10, 3, 8, 4, 6, 2, 9, 5, 7]
+XOR = 177451812
+ADD_105 = 8728348608
+ADD_ALL = 8728348608 - 2147483647 - 1  # Integer.MAX_VALUE
+
+# 构建tr表
+TR = [0] * 128
+for i in range(58):
+    TR[ord(TABLE[i])] = i
+
+def bv2av(bv):
+    """
+    将BVID转换为AID
+    :param bv: BVID字符串
+    :return: AID数字
+    """
+    r = 0
+    for i in range(6):
+        r += TR[ord(bv[S[i]])] * (58 ** i)
+    
+    add = ADD_105 if r >= ADD_105 else ADD_ALL
+    avid = (r - add) ^ XOR
+    return avid
+
+def av2bv(av):
+    """
+    将AID转换为BVID
+    :param av: AID数字
+    :return: BVID字符串
+    """
+    add = ADD_ALL if av > 1060000000 else ADD_105
+    x = (av ^ XOR) + add
+    
+    r = ['B', 'V', '1', ' ', ' ', '4', ' ', '1', ' ', '7', ' ', ' ']
+    for i in range(6):
+        r[S[i]] = TABLE[int((x // (58 ** i)) % 58)]
+    
+    return ''.join(r)
+
+def get_bilibili_video_title(bvid, bilibili_cookies_path):
+    """
+    通过BVID获取B站视频标题
+    :param bvid: BVID
+    :param bilibili_cookies_path: Bilibili cookies文件路径
+    :return: 视频标题
+    """
+    try:
+        # 读取Netscape格式的cookies文件并转换为Cookie头
+        cookies_header = ""
+        with open(bilibili_cookies_path, 'r', encoding='utf-8') as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith('#') and not line.startswith('//'):
+                    parts = line.split('\t')
+                    if len(parts) >= 7:
+                        cookies_header += f"{parts[5]}={parts[6]}; "
+        
+        # 构造请求头
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+            'Referer': 'https://www.bilibili.com/',
+            'Cookie': cookies_header.strip()
+        }
+        
+        # 将BVID转换为AID
+        aid = bv2av(bvid)
+        
+        # 请求API获取视频信息
+        api_url = f"https://api.bilibili.com/x/web-interface/wbi/view/detail?aid={aid}"
+        response = requests.get(api_url, headers=headers, timeout=30)
+        
+        if response.status_code == 200:
+            data = response.json()
+            if data.get('code') == 0:
+                view_data = data.get('data', {}).get('View', {})
+                returned_bvid = view_data.get('bvid', '')
+                title = view_data.get('title', bvid)
+                
+                # 检查返回的BVID是否与请求的一致
+                if returned_bvid == bvid:
+                    return title
+                else:
+                    return bvid
+        return bvid
+    except Exception as e:
+        print(f"获取Bilibili视频标题时发生错误: {e}")
+        return bvid
 
 
 def load_config():
@@ -21,15 +112,21 @@ def get_bilibili_cheese_title(ss_id, bilibili_cookies_path):
     :return: 课程标题
     """
     try:
-        # 读取cookies文件
+        # 读取Netscape格式的cookies文件并转换为Cookie头
+        cookies_header = ""
         with open(bilibili_cookies_path, 'r', encoding='utf-8') as f:
-            cookies_data = f.read()
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith('#') and not line.startswith('//'):
+                    parts = line.split('\t')
+                    if len(parts) >= 7:
+                        cookies_header += f"{parts[5]}={parts[6]}; "
         
         # 构造请求头
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
             'Referer': 'https://www.bilibili.com/',
-            'Cookie': cookies_data
+            'Cookie': cookies_header.strip()
         }
         
         # 请求API获取已购买的课程列表
@@ -60,15 +157,21 @@ def get_bilibili_bangumi_title(url, bilibili_cookies_path):
     :return: 番剧标题
     """
     try:
-        # 读取cookies文件
+        # 读取Netscape格式的cookies文件并转换为Cookie头
+        cookies_header = ""
         with open(bilibili_cookies_path, 'r', encoding='utf-8') as f:
-            cookies_data = f.read()
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith('#') and not line.startswith('//'):
+                    parts = line.split('\t')
+                    if len(parts) >= 7:
+                        cookies_header += f"{parts[5]}={parts[6]}; "
         
         # 构造请求头
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
             'Referer': 'https://www.bilibili.com/',
-            'Cookie': cookies_data
+            'Cookie': cookies_header.strip()
         }
         
         # 请求番剧页面
@@ -76,7 +179,6 @@ def get_bilibili_bangumi_title(url, bilibili_cookies_path):
         
         if response.status_code == 200:
             # 使用正则表达式查找class包含mediainfo_mediaTitle__的a标签的title属性
-            import re
             pattern = r'<a[^>]*class="[^"]*mediainfo_mediaTitle__[^"]*"[^>]*title="([^"]*)"'
             match = re.search(pattern, response.text)
             if match:
@@ -164,10 +266,9 @@ def extract_season_info_from_url(url):
     """
     parsed_url = urlparse(url)
     path_parts = parsed_url.path.strip('/').split('/')
-    mid = path_parts[1] if len(path_parts) > 1 else None
+    mid = path_parts[0] if len(path_parts) > 1 else None
 
-    query_params = parse_qs(parsed_url.query)
-    season_id = query_params.get('type', [None])[0]
+    season_id = path_parts[2] if len(path_parts) > 1 else None
 
     return mid, season_id
 
@@ -192,7 +293,7 @@ def generate_season_api_url(mid, season_id):
     :param season_id: 合集ID
     :return: API URL
     """
-    return f"https://api.bilibili.com/x/polymer/web-space/seasons_archives_list?mid={mid}&season_id={season_id}&sort_reverse=false&page_size=30&page_num=1&web_location=333.1387"
+    return f"https://api.bilibili.com/x/polymer/web-space/seasons_archives_list?mid={mid}&season_id={season_id}&sort_reverse=false&page_size=100&page_num=1&web_location=333.1387"
 
 
 def fetch_fav_list_data(api_url):
@@ -408,21 +509,31 @@ def download_bilibili_season_list(config, url, custom_path=None):
         print("无法从URL中提取mid或season_id参数，请检查URL格式")
         return False, "无法从URL中提取mid或season_id参数"
 
-    # 生成API URL
+    ytb_path = config.get('ytb_path')
+    base_download_path = custom_path if custom_path else config.get('download_path')
+    bilibili_cookies_path = config.get('bilibili_cookies_path')
+    
+    # 获取第一页数据以确定总数量和合集标题
     api_url = generate_season_api_url(mid, season_id)
-
-    # 获取数据
     data = fetch_fav_list_data(api_url)
-    if not data or data.get('code') != 0:
+    
+    if not data:
         print("无法获取合集数据")
         return False, "无法获取合集数据"
-
-    ytb_path = config.get('ytb_path')
-    base_download_path = config.get('download_path')
-    bilibili_cookies_path = config.get('bilibili_cookies_path')
+    
+    # 检查是否返回错误
+    if data.get('code') == -400:
+        # 如果返回-400错误，尝试使用page_size=30
+        api_url = f"https://api.bilibili.com/x/polymer/web-space/seasons_archives_list?mid={mid}&season_id={season_id}&sort_reverse=false&page_size=30&page_num=1&web_location=333.1387"
+        data = fetch_fav_list_data(api_url)
+        if not data or data.get('code') != 0:
+            print("无法获取合集数据")
+            return False, "无法获取合集数据"
+    
     meta = data.get('data', {}).get('meta', {})
     collection_title = meta.get('name', 'unknown_collection')
-
+    total_videos = meta.get('total', 0)
+    
     # 清理文件名
     collection_title = sanitize_filename(collection_title)
 
@@ -432,12 +543,36 @@ def download_bilibili_season_list(config, url, custom_path=None):
 
     # 获取已下载的视频
     downloaded_videos = get_downloaded_videos(full_path)
-
-    archives = data.get('data', {}).get('archives', [])
-    print(f"开始下载合集: {collection_title}，共 {len(archives)} 个视频")
+    
+    # 收集所有视频
+    all_archives = []
+    
+    # 计算总页数（默认page_size为100）
+    page_size = 100
+    if data.get('code') == -400:
+        page_size = 30
+    
+    total_pages = (total_videos + page_size - 1) // page_size
+    
+    # 获取所有页面的数据
+    for page_num in range(1, total_pages + 1):
+        if page_num > 1:  # 第一页已经获取过了
+            api_url = f"https://api.bilibili.com/x/polymer/web-space/seasons_archives_list?mid={mid}&season_id={season_id}&sort_reverse=false&page_size={page_size}&page_num={page_num}&web_location=333.1387"
+            page_data = fetch_fav_list_data(api_url)
+            if page_data and page_data.get('code') == 0:
+                archives = page_data.get('data', {}).get('archives', [])
+                all_archives.extend(archives)
+            else:
+                print(f"无法获取第{page_num}页数据")
+        else:
+            # 使用第一页的数据
+            archives = data.get('data', {}).get('archives', [])
+            all_archives.extend(archives)
+    
+    print(f"开始下载合集: {collection_title}，共 {len(all_archives)} 个视频")
 
     success_count = 0
-    for i, archive in enumerate(archives, 1):
+    for i, archive in enumerate(all_archives, 1):
         bvid = archive.get('bvid')
         title = archive.get('title')
 
@@ -470,7 +605,7 @@ def download_bilibili_season_list(config, url, custom_path=None):
             "--cookies", bilibili_cookies_path
         ]
 
-        print(f"\n正在下载 ({i}/{len(archives)}): {title} ({bvid})")
+        print(f"\n正在下载 ({i}/{len(all_archives)}): {title} ({bvid})")
         success, output = execute_ytb_command(ytb_path, *command_args)
         if success:
             success_count += 1
@@ -479,8 +614,8 @@ def download_bilibili_season_list(config, url, custom_path=None):
             print(f"下载失败: {title} ({bvid})")
             # 继续下载下一个视频而不是停止
 
-    print(f"\n合集 {collection_title} 下载完成! 成功: {success_count}/{len(archives)}")
-    return True, f"合集下载完成，成功: {success_count}/{len(archives)}"
+    print(f"\n合集 {collection_title} 下载完成! 成功: {success_count}/{len(all_archives)}")
+    return True, f"合集下载完成，成功: {success_count}/{len(all_archives)}"
 
 
 def download_bilibili_single_video(config, url, custom_path=None):
@@ -512,6 +647,10 @@ def download_bilibili_single_video(config, url, custom_path=None):
         ss_id = video_id.replace('ss', '')
         cheese_title = get_bilibili_cheese_title(ss_id, bilibili_cookies_path)
         video_dir_name = f"{cheese_title}_{video_id}"
+    elif "bilibili.com/video/BV" in url:
+        # 对于普通B站视频，获取标题并创建目录
+        video_title = get_bilibili_video_title(video_id, bilibili_cookies_path)
+        video_dir_name = f"{video_title}_{video_id}"
     else:
         # 其他视频使用ID作为目录名
         video_dir_name = f"{video_id}"
@@ -630,7 +769,7 @@ def process_url(config, url, custom_path=None):
     if "favlist" in url and "bilibili.com" in url:
         # B站收藏夹
         return download_bilibili_fav_list(config, url, custom_path)
-    elif "bilibili.com/lists/" in url and "type=season" in url:
+    elif "space.bilibili.com/" in url and "/lists/" in url:
         # B站合集
         return download_bilibili_season_list(config, url, custom_path)
     elif ("video/BV" in url and "bilibili.com" in url) or \
