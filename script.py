@@ -654,8 +654,14 @@ def download_bilibili_single_video(config, url, custom_path=None):
     else:
         # 其他视频使用ID作为目录名
         video_dir_name = f"{video_id}"
-    
+
+
+    illegal_chars = '\\/:<>"|?*'
+    for char in illegal_chars:
+        video_dir_name = video_dir_name.replace(char, '_')
+
     download_path = os.path.join(base_download_path, video_dir_name)
+
     os.makedirs(download_path, exist_ok=True)
 
     # 检查是否已经下载过该视频
@@ -717,6 +723,11 @@ def download_youtube_content(config, url, custom_path=None):
 
     # 创建内容特定目录 (使用ID，稍后yt-dlp会自动添加标题)
     content_dir_name = f"{url_identifier}" if url_identifier else "unknown_content"
+
+    illegal_chars = '\\/:<>"|?*'
+    for char in illegal_chars:
+        content_dir_name = content_dir_name.replace(char, '_')
+
     download_path = os.path.join(base_download_path, content_dir_name) if url_identifier else base_download_path
     os.makedirs(download_path, exist_ok=True)
 
@@ -758,6 +769,159 @@ def download_youtube_content(config, url, custom_path=None):
     return success, output
 
 
+def extract_series_info_from_url(url):
+    """
+    从系列URL中提取mid和series_id参数
+    :param url: 系列URL
+    :return: (mid, series_id)值
+    """
+    parsed_url = urlparse(url)
+    path_parts = parsed_url.path.strip('/').split('/')
+    
+    # URL格式: https://space.bilibili.com/512313464/lists/337795
+    # path_parts[0] = "space.bilibili.com"
+    # path_parts[1] = "512313464" (mid)
+    # path_parts[2] = "lists"
+    # path_parts[3] = "337795" (series_id)
+    
+    if len(path_parts) >= 4 and path_parts[2] == "lists":
+        mid = path_parts[1] if len(path_parts) > 1 else None
+        series_id = path_parts[3] if len(path_parts) > 3 else None
+        return mid, series_id
+    
+    return None, None
+
+
+def generate_series_api_url(mid, series_id, page_num=1, page_size=30):
+    """
+    根据mid和series_id生成系列API URL
+    :param mid: 用户ID
+    :param series_id: 系列ID
+    :param page_num: 页码
+    :param page_size: 每页数量
+    :return: API URL
+    """
+    return f"https://api.bilibili.com/x/series/archives?mid={mid}&current_mid=4008741&series_id={series_id}&only_normal=true&sort=desc&ps={page_size}&pn={page_num}&web_location=333.1387"
+
+
+def download_bilibili_series_list(config, url, custom_path=None):
+    """
+    下载B站系列视频
+    :param config: 配置信息
+    :param url: 系列URL
+    :param custom_path: 自定义路径
+    """
+    # 提取mid和series_id
+    # mid, series_id = extract_series_info_from_url(url)
+    mid, series_id = extract_season_info_from_url(url)
+    if not mid or not series_id:
+        print("无法从URL中提取mid或series_id参数，请检查URL格式")
+        return False, "无法从URL中提取mid或series_id参数"
+
+    ytb_path = config.get('ytb_path')
+    base_download_path = custom_path if custom_path else config.get('download_path')
+    bilibili_cookies_path = config.get('bilibili_cookies_path')
+    
+    # 获取系列元数据以获得系列标题
+    series_meta_url = f"https://api.bilibili.com/x/series/series?series_id={series_id}&web_location=333.1387"
+    meta_data = fetch_fav_list_data(series_meta_url)
+    
+    collection_title = "unknown_series"
+    if meta_data and meta_data.get('code') == 0:
+        meta = meta_data.get('data', {}).get('meta', {})
+        collection_title = meta.get('name', 'unknown_series')
+    
+    # 清理文件名
+    collection_title = sanitize_filename(collection_title)
+
+    # 创建目标目录
+    full_path = os.path.join(base_download_path, collection_title)
+    os.makedirs(full_path, exist_ok=True)
+
+    # 获取已下载的视频
+    downloaded_videos = get_downloaded_videos(full_path)
+    
+    # 收集所有视频
+    all_archives = []
+    
+    # 获取第一页数据以确定总数
+    api_url = generate_series_api_url(mid, series_id, 1, 30)
+    data = fetch_fav_list_data(api_url)
+    
+    if not data or data.get('code') != 0:
+        print("无法获取系列数据")
+        return False, "无法获取系列数据"
+    
+    # 获取总页数
+    page_info = data.get('data', {}).get('page', {})
+    total_size = page_info.get('total', 0)
+    page_size = page_info.get('size', 30)
+    total_pages = math.ceil(total_size / page_size)
+    
+    # 获取所有页面的数据
+    for page_num in range(1, total_pages + 1):
+        if page_num > 1:  # 第一页已经获取过了
+            api_url = generate_series_api_url(mid, series_id, page_num, page_size)
+            page_data = fetch_fav_list_data(api_url)
+            if page_data and page_data.get('code') == 0:
+                archives = page_data.get('data', {}).get('archives', [])
+                all_archives.extend(archives)
+            else:
+                print(f"无法获取第{page_num}页数据")
+        else:
+            # 使用第一页的数据
+            archives = data.get('data', {}).get('archives', [])
+            all_archives.extend(archives)
+    
+    print(f"开始下载系列: {collection_title}，共 {len(all_archives)} 个视频")
+
+    success_count = 0
+    for i, archive in enumerate(all_archives, 1):
+        bvid = archive.get('bvid')
+        title = archive.get('title')
+
+        # 生成视频URL
+        video_url = f"https://www.bilibili.com/video/{bvid}"
+
+        # 检查是否已经下载过该视频
+        video_exists = False
+        for video_file in downloaded_videos:
+            if bvid in video_file:
+                is_valid, reason = is_video_file_valid(video_file)
+                if is_valid:
+                    print(f"视频 {title} ({bvid}) 已存在且有效，跳过下载")
+                    video_exists = True
+                    success_count += 1
+                else:
+                    print(f"视频 {title} ({bvid}) 存在但无效 ({reason})，重新下载")
+                break
+
+        if video_exists:
+            continue
+
+        # 构造命令参数
+        command_args = [
+            video_url,
+            "--embed-thumbnail",
+            "--embed-metadata",
+            "--merge-output-format", "mp4",
+            "-P", full_path,
+            "--cookies", bilibili_cookies_path
+        ]
+
+        print(f"\n正在下载 ({i}/{len(all_archives)}): {title} ({bvid})")
+        success, output = execute_ytb_command(ytb_path, *command_args)
+        if success:
+            success_count += 1
+            print(f"下载成功: {title} ({bvid})")
+        else:
+            print(f"下载失败: {title} ({bvid})")
+            # 继续下载下一个视频而不是停止
+
+    print(f"\n系列 {collection_title} 下载完成! 成功: {success_count}/{len(all_archives)}")
+    return True, f"系列下载完成，成功: {success_count}/{len(all_archives)}"
+
+
 def process_url(config, url, custom_path=None):
     """
     根据URL类型处理下载
@@ -769,7 +933,10 @@ def process_url(config, url, custom_path=None):
     if "favlist" in url and "bilibili.com" in url:
         # B站收藏夹
         return download_bilibili_fav_list(config, url, custom_path)
-    elif "space.bilibili.com/" in url and "/lists/" in url:
+    elif "space.bilibili.com/" in url and "/lists/" in url and "type=series" in url:
+        # B站系列
+        return download_bilibili_series_list(config, url, custom_path)
+    elif "space.bilibili.com/" in url and "/lists/" in url and "type=season" in url:
         # B站合集
         return download_bilibili_season_list(config, url, custom_path)
     elif ("video/BV" in url and "bilibili.com" in url) or \
